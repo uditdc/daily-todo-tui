@@ -499,6 +499,64 @@ class GitManager {
   }
 }
 
+// Date Utility Class
+class DateUtils {
+  static isToday(date: Date): boolean {
+    const today = new Date();
+    return date.toDateString() === today.toDateString();
+  }
+
+  static isYesterday(date: Date): boolean {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return date.toDateString() === yesterday.toDateString();
+  }
+
+  static isThisWeek(date: Date): boolean {
+    const today = new Date();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - today.getDay()); // Sunday as start of week
+    startOfWeek.setHours(0, 0, 0, 0);
+    
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+    
+    return date >= startOfWeek && date <= endOfWeek;
+  }
+
+  static isLastWeek(date: Date): boolean {
+    const today = new Date();
+    const startOfLastWeek = new Date(today);
+    startOfLastWeek.setDate(today.getDate() - today.getDay() - 7); // Previous Sunday
+    startOfLastWeek.setHours(0, 0, 0, 0);
+    
+    const endOfLastWeek = new Date(startOfLastWeek);
+    endOfLastWeek.setDate(startOfLastWeek.getDate() + 6);
+    endOfLastWeek.setHours(23, 59, 59, 999);
+    
+    return date >= startOfLastWeek && date <= endOfLastWeek;
+  }
+
+  static getDateCategory(date: Date): 'today' | 'yesterday' | 'this-week' | 'last-week' | 'older' {
+    if (this.isToday(date)) return 'today';
+    if (this.isYesterday(date)) return 'yesterday';
+    if (this.isThisWeek(date)) return 'this-week';
+    if (this.isLastWeek(date)) return 'last-week';
+    return 'older';
+  }
+
+  static getCategoryLabel(category: 'today' | 'yesterday' | 'this-week' | 'last-week' | 'older'): string {
+    switch (category) {
+      case 'today': return 'Today';
+      case 'yesterday': return 'Yesterday';
+      case 'this-week': return 'This Week';
+      case 'last-week': return 'Last Week';
+      case 'older': return 'Older';
+    }
+  }
+}
+
 // Component Props Interfaces
 interface TodoItemProps {
   todo: Todo;
@@ -537,6 +595,10 @@ interface DidItemProps {
 interface RepoSettingsPanelProps {
   repositories: RepositoryConfig[];
   onScanRepos: () => void;
+}
+
+interface SectionHeaderProps {
+  label: string;
 }
 
 // Components
@@ -633,7 +695,7 @@ TodoItem.displayName = 'TodoItem';
 
 const DidItem: React.FC<DidItemProps> = memo(({ did, isSelected }) => {
   const selector = isSelected ? SYMBOLS.selected : SYMBOLS.unselected;
-  const typeIcon = did.type === 'todo' ? SYMBOLS.completed : '⚡';
+  const typeIcon = did.type === 'todo' ? SYMBOLS.completed : '';
   const typeColor = did.type === 'todo' ? THEME.colors.success : THEME.colors.secondary;
   
   return (
@@ -677,6 +739,20 @@ const DidItem: React.FC<DidItemProps> = memo(({ did, isSelected }) => {
 });
 
 DidItem.displayName = 'DidItem';
+
+const SectionHeader: React.FC<SectionHeaderProps> = memo(({ label }) => {
+  return (
+    <Box flexDirection="column" marginY={THEME.spacing.xs}>
+      <Box paddingX={THEME.layout.contentPadding}>
+        <Text color={THEME.colors.muted}>{"─".repeat(10)}</Text>
+        <Text color={THEME.colors.secondary} bold> {label} </Text>
+        <Text color={THEME.colors.muted}>{"─".repeat(10)}</Text>
+      </Box>
+    </Box>
+  );
+});
+
+SectionHeader.displayName = 'SectionHeader';
 
 const AddTodoForm: React.FC<AddTodoFormProps> = ({ onAdd, onCancel }) => {
   const [task, setTask] = useState<string>('');
@@ -906,6 +982,55 @@ const TodoApp: React.FC = () => {
   
   const updateState = (updates: Partial<AppState>) => {
     setState(prev => ({ ...prev, ...updates }));
+  };
+
+  const groupDidsByDate = (dids: DidItem[]): { [key: string]: DidItem[] } => {
+    const groups: { [key: string]: DidItem[] } = {};
+    
+    dids.forEach(did => {
+      const category = DateUtils.getDateCategory(did.completedAt);
+      if (!groups[category]) {
+        groups[category] = [];
+      }
+      groups[category].push(did);
+    });
+    
+    return groups;
+  };
+
+  const renderGroupedDids = (dids: DidItem[]): React.ReactElement[] => {
+    const groups = groupDidsByDate(dids);
+    const elements: React.ReactElement[] = [];
+    const categoryOrder: Array<'today' | 'yesterday' | 'this-week' | 'last-week' | 'older'> = 
+      ['today', 'yesterday', 'this-week', 'last-week', 'older'];
+    
+    let currentDidIndex = 0;
+    
+    categoryOrder.forEach(category => {
+      if (groups[category] && groups[category].length > 0) {
+        // Add section header
+        elements.push(
+          <SectionHeader key={`header-${category}`} label={DateUtils.getCategoryLabel(category)} />
+        );
+        
+        // Add items in this category
+        groups[category].forEach(did => {
+          // Find the original index of this DID in the sorted dids array
+          const originalIndex = dids.findIndex(originalDid => originalDid.id === did.id);
+          
+          elements.push(
+            <DidItem
+              key={did.id}
+              did={did}
+              isSelected={originalIndex === state.selectedIndex}
+            />
+          );
+          currentDidIndex++;
+        });
+      }
+    });
+    
+    return elements;
   };
 
   const scanForRepositories = () => {
@@ -1140,13 +1265,7 @@ const TodoApp: React.FC = () => {
                   <Text color={THEME.colors.muted}>No completed items found!</Text>
                 </Box>
               ) : (
-                state.dids.map((did, index) => (
-                  <DidItem
-                    key={did.id}
-                    did={did}
-                    isSelected={index === state.selectedIndex}
-                  />
-                ))
+                renderGroupedDids(state.dids)
               )
             )}
           </Box>
