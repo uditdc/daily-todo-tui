@@ -96,13 +96,13 @@ const TODO_FILE = path.join(os.homedir(), '.daily-todo.json');
 
 const THEME = {
   colors: {
-    primary: 'blue',
-    secondary: 'cyan',
-    success: 'green',
-    warning: 'yellow',
-    error: 'red',
-    muted: 'gray',
-    text: 'white',
+    primary: 'blueBright',
+    secondary: 'cyanBright',
+    success: 'greenBright',
+    warning: 'yellowBright',
+    error: 'redBright',
+    muted: 'magenta',
+    text: 'whiteBright',
     background: 'black'
   },
   spacing: {
