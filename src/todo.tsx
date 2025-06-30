@@ -89,7 +89,6 @@ interface AppState {
   showAddForm: boolean;
   showHelp: boolean;
   showStats: boolean;
-  showRepoSettings: boolean;
   error: string | null;
   dids: DidItem[];
   loadingDids: boolean;
@@ -391,65 +390,6 @@ class GitManager {
     }
   }
 
-  static scanForRepositories(basePaths: string[] = []): RepositoryConfig[] {
-    const defaultPaths = [
-      path.join(os.homedir(), 'Projects'),
-      path.join(os.homedir(), 'code'),
-      path.join(os.homedir(), 'dev'),
-      path.join(os.homedir(), 'Work'),
-      process.cwd()
-    ];
-
-    const searchPaths = [...defaultPaths, ...basePaths];
-    const repositories: RepositoryConfig[] = [];
-
-    for (const basePath of searchPaths) {
-      try {
-        if (!fs.existsSync(basePath)) continue;
-
-        const items = fs.readdirSync(basePath, { withFileTypes: true });
-        
-        for (const item of items) {
-          if (item.isDirectory()) {
-            const fullPath = path.join(basePath, item.name);
-            
-            if (this.isGitRepo(fullPath)) {
-              // Check for recent activity (commits in last 30 days)
-              if (this.hasRecentActivity(fullPath, 30)) {
-                repositories.push({
-                  id: `repo-${Date.now()}-${Math.random()}`,
-                  path: fullPath,
-                  name: item.name,
-                  enabled: true,
-                  lastScanned: new Date().toISOString()
-                });
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.warn(`Failed to scan ${basePath}:`, (error as Error).message);
-      }
-    }
-
-    return repositories;
-  }
-
-  static hasRecentActivity(repoPath: string, days: number): boolean {
-    try {
-      const sinceDate = new Date();
-      sinceDate.setDate(sinceDate.getDate() - days);
-      
-      const output = execSync(
-        `git log --since="${sinceDate.toISOString()}" --oneline`,
-        { encoding: 'utf8', stdio: 'pipe', cwd: repoPath }
-      );
-
-      return output.trim().length > 0;
-    } catch {
-      return false;
-    }
-  }
 
   static getRecentCommits(days: number = 7, config?: AppConfig): GitCommit[] {
     if (!this.isGitRepo()) {
@@ -627,10 +567,6 @@ interface DidItemProps {
   isSelected: boolean;
 }
 
-interface RepoSettingsPanelProps {
-  repositories: RepositoryConfig[];
-  onScanRepos: () => void;
-}
 
 interface SectionHeaderProps {
   label: string;
@@ -911,7 +847,7 @@ const HelpPanel: React.FC = memo(() => (
       <Text color={THEME.colors.muted}>TODOs: Space/Enter Toggle • a/n Add • d/Del Delete • v Views • 1/2/3 Quick View</Text>
     </Box>
     <Box>
-      <Text color={THEME.colors.muted}>Info: s/i Stats • h/? Help • r Repositories • f Scan repos • q/Esc Quit</Text>
+      <Text color={THEME.colors.muted}>Info: s/i Stats • h/? Help • q/Esc Quit</Text>
     </Box>
     <Box marginTop={THEME.spacing.xs}>
       <Text color={THEME.colors.secondary}>Tips:</Text>
@@ -957,44 +893,6 @@ const StatsPanel: React.FC<StatsPanelProps> = memo(({ todos }) => {
 
 StatsPanel.displayName = 'StatsPanel';
 
-const RepoSettingsPanel: React.FC<RepoSettingsPanelProps> = memo(({ repositories, onScanRepos }) => {
-  return (
-    <Box flexDirection="column" paddingX={THEME.layout.contentPadding} marginY={THEME.spacing.sm}>
-      <Text bold color={THEME.colors.primary}>Repository Settings</Text>
-      <Box marginTop={THEME.spacing.xs}>
-        <Text color={THEME.colors.muted}>Configured repositories: {repositories.length}</Text>
-      </Box>
-      
-      {repositories.length === 0 ? (
-        <Box marginTop={THEME.spacing.xs}>
-          <Text color={THEME.colors.warning}>No repositories found. Press 'f' to scan for repositories.</Text>
-        </Box>
-      ) : (
-        repositories.map((repo, index) => (
-          <Box key={repo.id} marginTop={index === 0 ? THEME.spacing.xs : 0}>
-            <Text color={repo.enabled ? THEME.colors.success : THEME.colors.muted}>
-              {repo.enabled ? '✓' : '○'}
-            </Text>
-            <Text color={THEME.colors.text}> {repo.name}</Text>
-            <Text color={THEME.colors.muted} dimColor> - {repo.path}</Text>
-          </Box>
-        ))
-      )}
-      
-      <Box marginTop={THEME.spacing.xs}>
-        <Text color={THEME.colors.secondary}>Controls:</Text>
-      </Box>
-      <Box>
-        <Text color={THEME.colors.muted}>• f: Scan for new repositories</Text>
-      </Box>
-      <Box>
-        <Text color={THEME.colors.muted}>• r: Toggle this panel</Text>
-      </Box>
-    </Box>
-  );
-});
-
-RepoSettingsPanel.displayName = 'RepoSettingsPanel';
 
 // Main App Component
 const TodoApp: React.FC = () => {
@@ -1006,7 +904,6 @@ const TodoApp: React.FC = () => {
     showAddForm: false,
     showHelp: false,
     showStats: false,
-    showRepoSettings: false,
     error: null,
     dids: [],
     loadingDids: false,
@@ -1069,29 +966,6 @@ const TodoApp: React.FC = () => {
     return elements;
   };
 
-  const scanForRepositories = () => {
-    try {
-      const discoveredRepos = GitManager.scanForRepositories();
-      
-      // Merge with existing repositories, avoid duplicates
-      const existingPaths = new Set(state.repositories.map(r => r.path));
-      const newRepos = discoveredRepos.filter(repo => !existingPaths.has(repo.path));
-      
-      const updatedRepositories = [...state.repositories, ...newRepos];
-      
-      // Save to file
-      const todoData = TodoManager.loadTodos();
-      todoData.repositories = updatedRepositories;
-      TodoManager.saveTodos(todoData);
-      
-      updateState({ 
-        repositories: updatedRepositories,
-        error: newRepos.length > 0 ? null : 'No new repositories found'
-      });
-    } catch (error) {
-      updateState({ error: `Failed to scan repositories: ${(error as Error).message}` });
-    }
-  };
 
   const loadDids = async () => {
     updateState({ loadingDids: true });
@@ -1224,13 +1098,9 @@ const TodoApp: React.FC = () => {
     }
     // Info panels
     else if (input === 'h' || input === 'H' || input === '?') {
-      updateState({ showHelp: !state.showHelp, showStats: false, showRepoSettings: false });
+      updateState({ showHelp: !state.showHelp, showStats: false });
     } else if (input === 's' || input === 'S' || input === 'i') {
-      updateState({ showStats: !state.showStats, showHelp: false, showRepoSettings: false });
-    } else if (input === 'r' || input === 'R') {
-      updateState({ showRepoSettings: !state.showRepoSettings, showHelp: false, showStats: false });
-    } else if (input === 'f' || input === 'F') {
-      scanForRepositories();
+      updateState({ showStats: !state.showStats, showHelp: false });
     }
     // Exit
     else if (input === 'q' || input === 'Q' || key.escape) {
@@ -1309,12 +1179,6 @@ const TodoApp: React.FC = () => {
 
           {state.showHelp && <HelpPanel />}
           {state.showStats && <StatsPanel todos={state.todos} />}
-          {state.showRepoSettings && (
-            <RepoSettingsPanel 
-              repositories={state.repositories} 
-              onScanRepos={scanForRepositories}
-            />
-          )}
         </Box>
       )}
 
