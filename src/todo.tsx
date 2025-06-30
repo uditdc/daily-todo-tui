@@ -5,6 +5,7 @@ import { render, Box, Text, useInput, useApp, Spacer } from 'ink';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 
 // Types and Interfaces
 interface Todo {
@@ -18,13 +19,23 @@ interface Todo {
   tags: string[];
 }
 
+interface RepositoryConfig {
+  id: string;
+  path: string;
+  name: string;
+  enabled: boolean;
+  lastScanned?: string;
+}
+
 interface TodoData {
   todos: Todo[];
   lastUpdated: string;
+  repositories: RepositoryConfig[];
 }
 
 type Priority = 'high' | 'medium' | 'low';
 type ViewType = 'all' | 'pending' | 'completed';
+type TabType = 'todos' | 'dids';
 type FormField = 'task' | 'priority' | 'persistent';
 
 interface PriorityConfig {
@@ -36,14 +47,48 @@ interface PriorityConfig {
   };
 }
 
+interface GitCommit {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+  timestamp: Date;
+  repository?: {
+    name: string;
+    path: string;
+  };
+}
+
+interface DidItem {
+  type: 'todo' | 'commit';
+  id: string;
+  title: string;
+  description?: string;
+  completedAt: Date;
+  metadata?: {
+    author?: string;
+    hash?: string;
+    priority?: Priority;
+    repository?: {
+      name: string;
+      path: string;
+    };
+  };
+}
+
 interface AppState {
   todos: Todo[];
   selectedIndex: number;
   view: ViewType;
+  currentTab: TabType;
   showAddForm: boolean;
   showHelp: boolean;
   showStats: boolean;
+  showRepoSettings: boolean;
   error: string | null;
+  dids: DidItem[];
+  loadingDids: boolean;
+  repositories: RepositoryConfig[];
 }
 
 // Design System & Configuration
@@ -107,7 +152,8 @@ class TodoManager {
       if (!fs.existsSync(TODO_FILE)) {
         return {
           todos: [],
-          lastUpdated: new Date().toDateString()
+          lastUpdated: new Date().toDateString(),
+          repositories: []
         };
       }
 
@@ -115,7 +161,8 @@ class TodoManager {
       if (!data.trim()) {
         return {
           todos: [],
-          lastUpdated: new Date().toDateString()
+          lastUpdated: new Date().toDateString(),
+          repositories: []
         };
       }
 
@@ -124,6 +171,11 @@ class TodoManager {
       // Validate data structure
       if (!parsed.todos || !Array.isArray(parsed.todos)) {
         throw new Error('Invalid todo data format');
+      }
+
+      // Ensure repositories array exists (backward compatibility)
+      if (!parsed.repositories) {
+        parsed.repositories = [];
       }
 
       // Filter out invalid todos
@@ -140,7 +192,8 @@ class TodoManager {
 
       const result = {
         todos: finalTodos,
-        lastUpdated: today
+        lastUpdated: today,
+        repositories: parsed.repositories || []
       };
 
       if (parsed.lastUpdated !== today) {
@@ -198,9 +251,11 @@ class TodoManager {
     };
     
     const newTodos = [...todos, todo];
+    const currentData = this.loadTodos();
     const data: TodoData = {
       todos: newTodos,
-      lastUpdated: new Date().toDateString()
+      lastUpdated: new Date().toDateString(),
+      repositories: currentData.repositories
     };
     
     this.saveTodos(data);
@@ -235,9 +290,11 @@ class TodoManager {
         : todo
     );
     
+    const currentData = this.loadTodos();
     const data: TodoData = {
       todos: newTodos,
-      lastUpdated: new Date().toDateString()
+      lastUpdated: new Date().toDateString(),
+      repositories: currentData.repositories
     };
     
     this.saveTodos(data);
@@ -251,9 +308,11 @@ class TodoManager {
     }
 
     const newTodos = todos.filter(todo => todo.id !== todoId);
+    const currentData = this.loadTodos();
     const data: TodoData = {
       todos: newTodos,
-      lastUpdated: new Date().toDateString()
+      lastUpdated: new Date().toDateString(),
+      repositories: currentData.repositories
     };
     
     this.saveTodos(data);
@@ -269,6 +328,172 @@ class TodoManager {
     const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     return { total, completed, pending, high, persistent, completionRate };
+  }
+
+  static convertTodosToDids(todos: Todo[]): DidItem[] {
+    return todos
+      .filter(todo => todo.completed && todo.completedAt)
+      .map(todo => ({
+        type: 'todo' as const,
+        id: `todo-${todo.id}`,
+        title: todo.task,
+        description: todo.tags.length > 0 ? `#${todo.tags.join(' #')}` : undefined,
+        completedAt: new Date(todo.completedAt!),
+        metadata: {
+          priority: todo.priority
+        }
+      }));
+  }
+}
+
+// Git Integration Class
+class GitManager {
+  static isGitRepo(path?: string): boolean {
+    try {
+      const command = 'git rev-parse --git-dir';
+      const options = { stdio: 'ignore' as const, cwd: path };
+      execSync(command, options);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  static scanForRepositories(basePaths: string[] = []): RepositoryConfig[] {
+    const defaultPaths = [
+      path.join(os.homedir(), 'Projects'),
+      path.join(os.homedir(), 'code'),
+      path.join(os.homedir(), 'dev'),
+      path.join(os.homedir(), 'Work'),
+      process.cwd()
+    ];
+
+    const searchPaths = [...defaultPaths, ...basePaths];
+    const repositories: RepositoryConfig[] = [];
+
+    for (const basePath of searchPaths) {
+      try {
+        if (!fs.existsSync(basePath)) continue;
+
+        const items = fs.readdirSync(basePath, { withFileTypes: true });
+        
+        for (const item of items) {
+          if (item.isDirectory()) {
+            const fullPath = path.join(basePath, item.name);
+            
+            if (this.isGitRepo(fullPath)) {
+              // Check for recent activity (commits in last 30 days)
+              if (this.hasRecentActivity(fullPath, 30)) {
+                repositories.push({
+                  id: `repo-${Date.now()}-${Math.random()}`,
+                  path: fullPath,
+                  name: item.name,
+                  enabled: true,
+                  lastScanned: new Date().toISOString()
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Failed to scan ${basePath}:`, (error as Error).message);
+      }
+    }
+
+    return repositories;
+  }
+
+  static hasRecentActivity(repoPath: string, days: number): boolean {
+    try {
+      const sinceDate = new Date();
+      sinceDate.setDate(sinceDate.getDate() - days);
+      
+      const output = execSync(
+        `git log --since="${sinceDate.toISOString()}" --oneline`,
+        { encoding: 'utf8', stdio: 'pipe', cwd: repoPath }
+      );
+
+      return output.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  static getRecentCommits(days: number = 7): GitCommit[] {
+    if (!this.isGitRepo()) {
+      return [];
+    }
+
+    return this.getCommitsFromRepository(process.cwd(), days);
+  }
+
+  static getCommitsFromRepository(repoPath: string, days: number = 7): GitCommit[] {
+    if (!this.isGitRepo(repoPath)) {
+      return [];
+    }
+
+    try {
+      const sinceDate = new Date();
+      sinceDate.setDate(sinceDate.getDate() - days);
+      
+      const output = execSync(
+        `git log --since="${sinceDate.toISOString()}" --pretty=format:"%H|%s|%an|%ai" --no-merges`,
+        { encoding: 'utf8', stdio: 'pipe', cwd: repoPath }
+      );
+
+      if (!output.trim()) {
+        return [];
+      }
+
+      const repoName = path.basename(repoPath);
+
+      return output.trim().split('\n').map(line => {
+        const [hash, message, author, date] = line.split('|');
+        return {
+          hash: hash.substring(0, 8),
+          message: message.trim(),
+          author: author.trim(),
+          date: new Date(date).toLocaleDateString(),
+          timestamp: new Date(date),
+          repository: {
+            name: repoName,
+            path: repoPath
+          }
+        };
+      });
+    } catch (error) {
+      console.warn(`Failed to fetch git commits from ${repoPath}:`, (error as Error).message);
+      return [];
+    }
+  }
+
+  static getAllCommitsFromRepositories(repositories: RepositoryConfig[], days: number = 7): GitCommit[] {
+    const allCommits: GitCommit[] = [];
+
+    for (const repo of repositories) {
+      if (repo.enabled) {
+        const commits = this.getCommitsFromRepository(repo.path, days);
+        allCommits.push(...commits);
+      }
+    }
+
+    // Sort by timestamp (newest first)
+    return allCommits.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  }
+
+  static convertCommitsToDids(commits: GitCommit[]): DidItem[] {
+    return commits.map(commit => ({
+      type: 'commit' as const,
+      id: `commit-${commit.hash}`,
+      title: commit.message,
+      description: `by ${commit.author}${commit.repository ? ` in ${commit.repository.name}` : ''}`,
+      completedAt: commit.timestamp,
+      metadata: {
+        author: commit.author,
+        hash: commit.hash,
+        repository: commit.repository
+      }
+    }));
   }
 }
 
@@ -296,6 +521,22 @@ interface HeaderProps {
   date: string;
 }
 
+interface TabHeaderProps {
+  currentTab: TabType;
+  todosCount: number;
+  didsCount: number;
+}
+
+interface DidItemProps {
+  did: DidItem;
+  isSelected: boolean;
+}
+
+interface RepoSettingsPanelProps {
+  repositories: RepositoryConfig[];
+  onScanRepos: () => void;
+}
+
 // Components
 const Header: React.FC<HeaderProps> = memo(({ date }) => {
   const title = "Daily Todo";
@@ -314,6 +555,40 @@ const Header: React.FC<HeaderProps> = memo(({ date }) => {
 });
 
 Header.displayName = 'Header';
+
+const TabHeader: React.FC<TabHeaderProps> = memo(({ currentTab, todosCount, didsCount }) => {
+  const todoTab = currentTab === 'todos';
+  const didTab = currentTab === 'dids';
+  
+  return (
+    <Box flexDirection="column" marginBottom={THEME.spacing.xs}>
+      <Box paddingX={THEME.layout.contentPadding}>
+        <Box borderStyle="round" borderColor={todoTab ? THEME.colors.primary : THEME.colors.muted}>
+          <Text 
+            color={todoTab ? THEME.colors.primary : THEME.colors.muted}
+            bold={todoTab}
+          >
+            {` TODOs (${todosCount}) `}
+          </Text>
+        </Box>
+        <Text color={THEME.colors.muted}>  </Text>
+        <Box borderStyle="round" borderColor={didTab ? THEME.colors.primary : THEME.colors.muted}>
+          <Text 
+            color={didTab ? THEME.colors.primary : THEME.colors.muted}
+            bold={didTab}
+          >
+            {` DIDs (${didsCount}) `}
+          </Text>
+        </Box>
+      </Box>
+      <Box paddingX={THEME.layout.contentPadding}>
+        <Text color={THEME.colors.muted}>{"─".repeat(THEME.layout.maxWidth - 4)}</Text>
+      </Box>
+    </Box>
+  );
+});
+
+TabHeader.displayName = 'TabHeader';
 
 const TodoItem: React.FC<TodoItemProps> = memo(({ todo, isSelected }) => {
   const priorityConfig = PRIORITY_CONFIG[todo.priority];
@@ -353,6 +628,53 @@ const TodoItem: React.FC<TodoItemProps> = memo(({ todo, isSelected }) => {
 });
 
 TodoItem.displayName = 'TodoItem';
+
+const DidItem: React.FC<DidItemProps> = memo(({ did, isSelected }) => {
+  const selector = isSelected ? SYMBOLS.selected : SYMBOLS.unselected;
+  const typeIcon = did.type === 'todo' ? SYMBOLS.completed : '⚡';
+  const typeColor = did.type === 'todo' ? THEME.colors.success : THEME.colors.secondary;
+  
+  return (
+    <Box paddingX={THEME.layout.contentPadding} paddingY={0}>
+      <Text color={isSelected ? THEME.colors.primary : THEME.colors.muted}>
+        {selector}
+      </Text>
+      <Text color={typeColor}>
+        {typeIcon}
+      </Text>
+      <Text color="white"> </Text>
+      <Text color={THEME.colors.text}>
+        {did.title}
+      </Text>
+      {did.description && (
+        <Text color={THEME.colors.muted} dimColor>
+          {' '}{did.description}
+        </Text>
+      )}
+      <Spacer />
+      <Text color={THEME.colors.muted} dimColor>
+        {did.completedAt.toLocaleDateString()}
+      </Text>
+      {did.metadata?.priority && (
+        <Text color={PRIORITY_CONFIG[did.metadata.priority].color} dimColor>
+          {' '}{PRIORITY_CONFIG[did.metadata.priority].label}
+        </Text>
+      )}
+      {did.metadata?.repository && (
+        <Text color={THEME.colors.secondary} dimColor>
+          {' '}[{did.metadata.repository.name}]
+        </Text>
+      )}
+      {did.metadata?.hash && (
+        <Text color={THEME.colors.muted} dimColor>
+          {' '}{did.metadata.hash}
+        </Text>
+      )}
+    </Box>
+  );
+});
+
+DidItem.displayName = 'DidItem';
 
 const AddTodoForm: React.FC<AddTodoFormProps> = ({ onAdd, onCancel }) => {
   const [task, setTask] = useState<string>('');
@@ -470,19 +792,22 @@ const HelpPanel: React.FC = memo(() => (
   <Box flexDirection="column" paddingX={THEME.layout.contentPadding} marginY={THEME.spacing.sm}>
     <Text bold color={THEME.colors.primary}>Keyboard Shortcuts</Text>
     <Box marginTop={THEME.spacing.xs}>
-      <Text color={THEME.colors.muted}>Navigation: ↑↓/jk Move • g/G First/Last • Space/Enter Toggle</Text>
+      <Text color={THEME.colors.muted}>Navigation: ↑↓/jk Move • g/G First/Last • Tab/t Switch tabs</Text>
     </Box>
     <Box>
-      <Text color={THEME.colors.muted}>Actions: a/n Add • d/Del Delete • v/Tab Views • 1/2/3 Quick View</Text>
+      <Text color={THEME.colors.muted}>TODOs: Space/Enter Toggle • a/n Add • d/Del Delete • v Views • 1/2/3 Quick View</Text>
     </Box>
     <Box>
-      <Text color={THEME.colors.muted}>Info: s/i Stats • h/? Help • q/Esc Quit</Text>
+      <Text color={THEME.colors.muted}>Info: s/i Stats • h/? Help • r Repositories • f Scan repos • q/Esc Quit</Text>
     </Box>
     <Box marginTop={THEME.spacing.xs}>
       <Text color={THEME.colors.secondary}>Tips:</Text>
     </Box>
     <Box>
       <Text color={THEME.colors.muted}>• Use #tags for organization • Persistent todos survive daily reset</Text>
+    </Box>
+    <Box>
+      <Text color={THEME.colors.muted}>• DIDs show completed todos and recent Git commits</Text>
     </Box>
   </Box>
 ));
@@ -519,16 +844,60 @@ const StatsPanel: React.FC<StatsPanelProps> = memo(({ todos }) => {
 
 StatsPanel.displayName = 'StatsPanel';
 
+const RepoSettingsPanel: React.FC<RepoSettingsPanelProps> = memo(({ repositories, onScanRepos }) => {
+  return (
+    <Box flexDirection="column" paddingX={THEME.layout.contentPadding} marginY={THEME.spacing.sm}>
+      <Text bold color={THEME.colors.primary}>Repository Settings</Text>
+      <Box marginTop={THEME.spacing.xs}>
+        <Text color={THEME.colors.muted}>Configured repositories: {repositories.length}</Text>
+      </Box>
+      
+      {repositories.length === 0 ? (
+        <Box marginTop={THEME.spacing.xs}>
+          <Text color={THEME.colors.warning}>No repositories found. Press 'f' to scan for repositories.</Text>
+        </Box>
+      ) : (
+        repositories.map((repo, index) => (
+          <Box key={repo.id} marginTop={index === 0 ? THEME.spacing.xs : 0}>
+            <Text color={repo.enabled ? THEME.colors.success : THEME.colors.muted}>
+              {repo.enabled ? '✓' : '○'}
+            </Text>
+            <Text color={THEME.colors.text}> {repo.name}</Text>
+            <Text color={THEME.colors.muted} dimColor> - {repo.path}</Text>
+          </Box>
+        ))
+      )}
+      
+      <Box marginTop={THEME.spacing.xs}>
+        <Text color={THEME.colors.secondary}>Controls:</Text>
+      </Box>
+      <Box>
+        <Text color={THEME.colors.muted}>• f: Scan for new repositories</Text>
+      </Box>
+      <Box>
+        <Text color={THEME.colors.muted}>• r: Toggle this panel</Text>
+      </Box>
+    </Box>
+  );
+});
+
+RepoSettingsPanel.displayName = 'RepoSettingsPanel';
+
 // Main App Component
 const TodoApp: React.FC = () => {
   const [state, setState] = useState<AppState>({
     todos: [],
     selectedIndex: 0,
     view: 'all',
+    currentTab: 'todos',
     showAddForm: false,
     showHelp: false,
     showStats: false,
-    error: null
+    showRepoSettings: false,
+    error: null,
+    dids: [],
+    loadingDids: false,
+    repositories: []
   });
   const { exit } = useApp();
   const today = useMemo(() => new Date().toDateString(), []);
@@ -537,15 +906,74 @@ const TodoApp: React.FC = () => {
     setState(prev => ({ ...prev, ...updates }));
   };
 
-  // Load todos on mount
+  const scanForRepositories = () => {
+    try {
+      const discoveredRepos = GitManager.scanForRepositories();
+      
+      // Merge with existing repositories, avoid duplicates
+      const existingPaths = new Set(state.repositories.map(r => r.path));
+      const newRepos = discoveredRepos.filter(repo => !existingPaths.has(repo.path));
+      
+      const updatedRepositories = [...state.repositories, ...newRepos];
+      
+      // Save to file
+      const todoData = TodoManager.loadTodos();
+      todoData.repositories = updatedRepositories;
+      TodoManager.saveTodos(todoData);
+      
+      updateState({ 
+        repositories: updatedRepositories,
+        error: newRepos.length > 0 ? null : 'No new repositories found'
+      });
+    } catch (error) {
+      updateState({ error: `Failed to scan repositories: ${(error as Error).message}` });
+    }
+  };
+
+  const loadDids = async () => {
+    updateState({ loadingDids: true });
+    try {
+      const completedTodos = TodoManager.convertTodosToDids(state.todos);
+      
+      // Get commits from all configured repositories
+      const commits = state.repositories.length > 0
+        ? GitManager.getAllCommitsFromRepositories(state.repositories, 7)
+        : GitManager.getRecentCommits(7); // Fallback to current repo
+      
+      const commitDids = GitManager.convertCommitsToDids(commits);
+      
+      const allDids = [...completedTodos, ...commitDids]
+        .sort((a, b) => b.completedAt.getTime() - a.completedAt.getTime());
+      
+      updateState({ dids: allDids, loadingDids: false });
+    } catch (error) {
+      updateState({ 
+        error: `Failed to load DIDs: ${(error as Error).message}`,
+        loadingDids: false
+      });
+    }
+  };
+
+  // Load todos and repositories on mount
   useEffect(() => {
     try {
       const data = TodoManager.loadTodos();
-      updateState({ todos: data.todos, error: null });
+      updateState({ 
+        todos: data.todos, 
+        repositories: data.repositories,
+        error: null 
+      });
     } catch (error) {
       updateState({ error: `Failed to load todos: ${(error as Error).message}` });
     }
   }, []);
+
+  // Load DIDs when switching to DIDs tab or when todos/repositories change
+  useEffect(() => {
+    if (state.currentTab === 'dids') {
+      loadDids();
+    }
+  }, [state.currentTab, state.todos, state.repositories]);
 
   // Filter todos based on view
   const filteredTodos = state.todos.filter(todo => {
@@ -567,6 +995,10 @@ const TodoApp: React.FC = () => {
     return PRIORITY_CONFIG[a.priority].order - PRIORITY_CONFIG[b.priority].order;
   });
 
+  // Get current items based on active tab
+  const currentItems = state.currentTab === 'todos' ? sortedTodos : state.dids;
+  const currentItemsCount = currentItems.length;
+
   // Handle keyboard input
   useInput((input, key) => {
     if (state.showAddForm) return; // Let AddTodoForm handle input
@@ -576,29 +1008,34 @@ const TodoApp: React.FC = () => {
       updateState({ error: null });
     }
 
+    // Tab switching
+    if (key.tab || input === 't' || input === 'T') {
+      const newTab: TabType = state.currentTab === 'todos' ? 'dids' : 'todos';
+      updateState({ currentTab: newTab, selectedIndex: 0 });
+    }
     // Navigation
-    if (key.upArrow || input === 'k') {
+    else if (key.upArrow || input === 'k') {
       if (state.selectedIndex > 0) {
         updateState({ selectedIndex: state.selectedIndex - 1 });
       }
     } else if (key.downArrow || input === 'j') {
-      if (state.selectedIndex < sortedTodos.length - 1) {
+      if (state.selectedIndex < currentItemsCount - 1) {
         updateState({ selectedIndex: state.selectedIndex + 1 });
       }
     } else if (input === 'g') {
       updateState({ selectedIndex: 0 });
     } else if (input === 'G') {
-      updateState({ selectedIndex: Math.max(0, sortedTodos.length - 1) });
+      updateState({ selectedIndex: Math.max(0, currentItemsCount - 1) });
     } 
-    // Actions on selected todo
-    else if ((input === ' ' || key.return) && sortedTodos[state.selectedIndex]) {
+    // Actions on selected todo (only in todos tab)
+    else if (state.currentTab === 'todos' && (input === ' ' || key.return) && sortedTodos[state.selectedIndex]) {
       try {
         const newTodos = TodoManager.toggleComplete(state.todos, sortedTodos[state.selectedIndex].id);
         updateState({ todos: newTodos });
       } catch (error) {
         updateState({ error: `Failed to toggle todo: ${(error as Error).message}` });
       }
-    } else if ((input === 'd' || input === 'D' || key.delete) && sortedTodos[state.selectedIndex]) {
+    } else if (state.currentTab === 'todos' && (input === 'd' || input === 'D' || key.delete) && sortedTodos[state.selectedIndex]) {
       try {
         const newTodos = TodoManager.removeTodo(state.todos, sortedTodos[state.selectedIndex].id);
         const newSelectedIndex = state.selectedIndex >= newTodos.length ? Math.max(0, newTodos.length - 1) : state.selectedIndex;
@@ -610,23 +1047,27 @@ const TodoApp: React.FC = () => {
     // App actions
     else if (input === 'a' || input === 'A' || input === 'n') {
       updateState({ showAddForm: true, showHelp: false, showStats: false });
-    } else if (input === 'v' || input === 'V' || key.tab) {
+    } else if (state.currentTab === 'todos' && (input === 'v' || input === 'V')) {
       const views: ViewType[] = ['all', 'pending', 'completed'];
       const currentIndex = views.indexOf(state.view);
       updateState({ view: views[(currentIndex + 1) % views.length], selectedIndex: 0 });
-    } else if (input === '1') {
+    } else if (state.currentTab === 'todos' && input === '1') {
       updateState({ view: 'all', selectedIndex: 0 });
-    } else if (input === '2') {
+    } else if (state.currentTab === 'todos' && input === '2') {
       updateState({ view: 'pending', selectedIndex: 0 });
-    } else if (input === '3') {
+    } else if (state.currentTab === 'todos' && input === '3') {
       updateState({ view: 'completed', selectedIndex: 0 });
     }
     // Info panels
     else if (input === 'h' || input === 'H' || input === '?') {
-      updateState({ showHelp: !state.showHelp, showStats: false });
+      updateState({ showHelp: !state.showHelp, showStats: false, showRepoSettings: false });
     } else if (input === 's' || input === 'S' || input === 'i') {
-      updateState({ showStats: !state.showStats, showHelp: false });
-    } 
+      updateState({ showStats: !state.showStats, showHelp: false, showRepoSettings: false });
+    } else if (input === 'r' || input === 'R') {
+      updateState({ showRepoSettings: !state.showRepoSettings, showHelp: false, showStats: false });
+    } else if (input === 'f' || input === 'F') {
+      scanForRepositories();
+    }
     // Exit
     else if (input === 'q' || input === 'Q' || key.escape) {
       exit();
@@ -648,14 +1089,19 @@ const TodoApp: React.FC = () => {
 
   // Adjust selected index if it's out of bounds
   useEffect(() => {
-    if (state.selectedIndex >= sortedTodos.length) {
-      updateState({ selectedIndex: Math.max(0, sortedTodos.length - 1) });
+    if (state.selectedIndex >= currentItemsCount) {
+      updateState({ selectedIndex: Math.max(0, currentItemsCount - 1) });
     }
-  }, [sortedTodos.length, state.selectedIndex]);
+  }, [currentItemsCount, state.selectedIndex]);
 
   return (
     <Box flexDirection="column" minHeight={24}>
       <Header date={today} />
+      <TabHeader 
+        currentTab={state.currentTab} 
+        todosCount={state.todos.length} 
+        didsCount={state.dids.length} 
+      />
       
       {state.error && (
         <Box paddingX={THEME.layout.contentPadding}>
@@ -668,23 +1114,49 @@ const TodoApp: React.FC = () => {
       ) : (
         <Box flexDirection="column" flexGrow={1}>
           <Box flexDirection="column" minHeight={5} flexGrow={1}>
-            {sortedTodos.length === 0 ? (
-              <Box padding={THEME.spacing.md}>
-                <Text color={THEME.colors.muted}>No todos found. Press 'a' to add one!</Text>
-              </Box>
+            {state.currentTab === 'todos' ? (
+              sortedTodos.length === 0 ? (
+                <Box padding={THEME.spacing.md}>
+                  <Text color={THEME.colors.muted}>No todos found. Press 'a' to add one!</Text>
+                </Box>
+              ) : (
+                sortedTodos.map((todo, index) => (
+                  <TodoItem
+                    key={todo.id}
+                    todo={todo}
+                    isSelected={index === state.selectedIndex}
+                  />
+                ))
+              )
             ) : (
-              sortedTodos.map((todo, index) => (
-                <TodoItem
-                  key={todo.id}
-                  todo={todo}
-                  isSelected={index === state.selectedIndex}
-                />
-              ))
+              state.loadingDids ? (
+                <Box padding={THEME.spacing.md}>
+                  <Text color={THEME.colors.muted}>Loading DIDs...</Text>
+                </Box>
+              ) : state.dids.length === 0 ? (
+                <Box padding={THEME.spacing.md}>
+                  <Text color={THEME.colors.muted}>No completed items found!</Text>
+                </Box>
+              ) : (
+                state.dids.map((did, index) => (
+                  <DidItem
+                    key={did.id}
+                    did={did}
+                    isSelected={index === state.selectedIndex}
+                  />
+                ))
+              )
             )}
           </Box>
 
           {state.showHelp && <HelpPanel />}
           {state.showStats && <StatsPanel todos={state.todos} />}
+          {state.showRepoSettings && (
+            <RepoSettingsPanel 
+              repositories={state.repositories} 
+              onScanRepos={scanForRepositories}
+            />
+          )}
         </Box>
       )}
 
@@ -778,5 +1250,5 @@ Data stored at: ${TODO_FILE}`);
 
 main();
 
-export { TodoManager, Todo, TodoData, Priority, ViewType };
+export { TodoManager, GitManager, Todo, TodoData, Priority, ViewType, TabType, DidItem, GitCommit, RepositoryConfig };
 export default TodoApp;
