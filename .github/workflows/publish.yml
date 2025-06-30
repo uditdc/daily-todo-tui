@@ -76,32 +76,6 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.get_version.outputs.VERSION }}
-          body: |
-            ## Changes in ${{ steps.get_version.outputs.VERSION }}
-            
-            Published to NPM as `daily-todo-tui@${{ steps.get_version.outputs.VERSION }}`
-            
-            ### Installation
-            ```bash
-            npm install -g daily-todo-tui
-            ```
-            
-            ### Usage
-            ```bash
-            daily-todo
-            # or
-            todo-tui
-            ```
-          draft: false
-          prerelease: false
 
   manual-publish:
     runs-on: ubuntu-latest

@@ -35,12 +35,12 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/uditdc/todo.git"
+    "url": "git+https://github.com/uditdc/daily-todo-tui.git"
   },
   "bugs": {
-    "url": "https://github.com/uditdc/todo/issues"
+    "url": "https://github.com/uditdc/daily-todo-tui/issues"
   },
-  "homepage": "https://github.com/uditdc/todo#readme",
+  "homepage": "https://github.com/uditdc/daily-todo-tui#readme",
   "engines": {
     "node": ">=16.0.0"
   },
