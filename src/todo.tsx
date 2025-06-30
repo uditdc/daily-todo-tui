@@ -447,20 +447,22 @@ class GitManager {
 
       const repoName = path.basename(repoPath);
 
-      return output.trim().split('\n').map(line => {
-        const [hash, message, author, date] = line.split('|');
-        return {
-          hash: hash.substring(0, 8),
-          message: message.trim(),
-          author: author.trim(),
-          date: new Date(date).toLocaleDateString(),
-          timestamp: new Date(date),
-          repository: {
-            name: repoName,
-            path: repoPath
-          }
-        };
-      });
+      return output.trim().split('\n')
+        .map(line => {
+          const [hash, message, author, date] = line.split('|');
+          return {
+            hash: hash.substring(0, 8),
+            message: message.trim(),
+            author: author.trim(),
+            date: new Date(date).toLocaleDateString(),
+            timestamp: new Date(date),
+            repository: {
+              name: repoName,
+              path: repoPath
+            }
+          };
+        })
+        .filter(commit => commit.author.toLowerCase().includes('udit'));
     } catch (error) {
       console.warn(`Failed to fetch git commits from ${repoPath}:`, (error as Error).message);
       return [];
