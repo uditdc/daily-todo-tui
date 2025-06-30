@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 
 import React, { useState, useEffect, useMemo, memo } from 'react';
 import { render, Box, Text, useInput, useApp, Spacer } from 'ink';

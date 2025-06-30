@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm start          # Run the TUI application
 npm run dev        # Development mode (same as start)
-tsx src/todo.tsx   # Direct execution
+tsx src/index.tsx   # Direct execution
 ```
 
 ### TypeScript
@@ -27,7 +27,7 @@ npm start tui      # Explicit TUI mode
 This is a Terminal User Interface (TUI) todo application built with React and Ink. The application has dual modes: interactive TUI and command-line interface.
 
 ### Core Structure
-- **Single-file architecture**: All code lives in `src/todo.tsx` (590+ lines)
+- **Single-file architecture**: All code lives in `src/index.tsx` (590+ lines)
 - **Data persistence**: JSON file storage in user's home directory (`~/.daily-todo.json`)
 - **Daily reset functionality**: Non-persistent todos automatically reset each day
 - **Tag support**: Extract hashtags from task descriptions

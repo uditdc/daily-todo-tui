@@ -1,16 +1,49 @@
 {
-  "name": "todo",
+  "name": "daily-todo-tui",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "A beautiful terminal-based todo application with modern TUI interface, daily reset functionality, and Git integration",
+  "main": "dist/index.js",
   "type": "module",
-  "scripts": {
-    "start": "tsx src/todo.tsx",
-    "dev": "tsx src/todo.tsx",
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "bin": {
+    "daily-todo": "dist/index.js",
+    "todo-tui": "dist/index.js"
   },
-  "author": "",
+  "scripts": {
+    "start": "tsx src/index.tsx",
+    "dev": "tsx src/index.tsx",
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "tsc --noEmit"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CLAUDE.md"
+  ],
+  "keywords": [
+    "todo",
+    "cli",
+    "terminal",
+    "tui",
+    "productivity",
+    "task-management",
+    "react",
+    "ink",
+    "daily-todos"
+  ],
+  "author": "Udit <25996904+uditdc@users.noreply.github.com>",
   "license": "ISC",
-  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uditdc/todo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/uditdc/todo/issues"
+  },
+  "homepage": "https://github.com/uditdc/todo#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "dependencies": {
     "ink": "^5.2.1",
     "react": "^18.3.1"
