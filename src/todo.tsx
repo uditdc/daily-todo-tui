@@ -27,10 +27,15 @@ interface RepositoryConfig {
   lastScanned?: string;
 }
 
+interface AppConfig {
+  gitAuthor?: string;
+}
+
 interface TodoData {
   todos: Todo[];
   lastUpdated: string;
   repositories: RepositoryConfig[];
+  config?: AppConfig;
 }
 
 type Priority = 'high' | 'medium' | 'low';
@@ -89,6 +94,7 @@ interface AppState {
   dids: DidItem[];
   loadingDids: boolean;
   repositories: RepositoryConfig[];
+  config: AppConfig;
 }
 
 // Design System & Configuration
@@ -153,7 +159,8 @@ class TodoManager {
         return {
           todos: [],
           lastUpdated: new Date().toDateString(),
-          repositories: []
+          repositories: [],
+          config: {}
         };
       }
 
@@ -162,7 +169,8 @@ class TodoManager {
         return {
           todos: [],
           lastUpdated: new Date().toDateString(),
-          repositories: []
+          repositories: [],
+          config: {}
         };
       }
 
@@ -176,6 +184,11 @@ class TodoManager {
       // Ensure repositories array exists (backward compatibility)
       if (!parsed.repositories) {
         parsed.repositories = [];
+      }
+
+      // Ensure config exists (backward compatibility)
+      if (!parsed.config) {
+        parsed.config = {};
       }
 
       // Filter out invalid todos
@@ -193,7 +206,8 @@ class TodoManager {
       const result = {
         todos: finalTodos,
         lastUpdated: today,
-        repositories: parsed.repositories || []
+        repositories: parsed.repositories || [],
+        config: parsed.config || {}
       };
 
       if (parsed.lastUpdated !== today) {
@@ -255,7 +269,8 @@ class TodoManager {
     const data: TodoData = {
       todos: newTodos,
       lastUpdated: new Date().toDateString(),
-      repositories: currentData.repositories
+      repositories: currentData.repositories,
+      config: currentData.config || {}
     };
     
     this.saveTodos(data);
@@ -294,7 +309,8 @@ class TodoManager {
     const data: TodoData = {
       todos: newTodos,
       lastUpdated: new Date().toDateString(),
-      repositories: currentData.repositories
+      repositories: currentData.repositories,
+      config: currentData.config || {}
     };
     
     this.saveTodos(data);
@@ -312,7 +328,8 @@ class TodoManager {
     const data: TodoData = {
       todos: newTodos,
       lastUpdated: new Date().toDateString(),
-      repositories: currentData.repositories
+      repositories: currentData.repositories,
+      config: currentData.config || {}
     };
     
     this.saveTodos(data);
@@ -348,6 +365,21 @@ class TodoManager {
 
 // Git Integration Class
 class GitManager {
+  static getGitUser(config?: AppConfig): string | null {
+    // First try to use configured author
+    if (config?.gitAuthor) {
+      return config.gitAuthor;
+    }
+    
+    // Fall back to Git config
+    try {
+      const gitUser = execSync('git config user.name', { encoding: 'utf8', stdio: 'pipe' }).trim();
+      return gitUser || null;
+    } catch {
+      return null;
+    }
+  }
+
   static isGitRepo(path?: string): boolean {
     try {
       const command = 'git rev-parse --git-dir';
@@ -419,15 +451,15 @@ class GitManager {
     }
   }
 
-  static getRecentCommits(days: number = 7): GitCommit[] {
+  static getRecentCommits(days: number = 7, config?: AppConfig): GitCommit[] {
     if (!this.isGitRepo()) {
       return [];
     }
 
-    return this.getCommitsFromRepository(process.cwd(), days);
+    return this.getCommitsFromRepository(process.cwd(), days, config);
   }
 
-  static getCommitsFromRepository(repoPath: string, days: number = 7): GitCommit[] {
+  static getCommitsFromRepository(repoPath: string, days: number = 7, config?: AppConfig): GitCommit[] {
     if (!this.isGitRepo(repoPath)) {
       return [];
     }
@@ -462,19 +494,22 @@ class GitManager {
             }
           };
         })
-        .filter(commit => commit.author.toLowerCase().includes('udit'));
+        .filter(commit => {
+          const gitUser = this.getGitUser(config);
+          return gitUser ? commit.author.toLowerCase().includes(gitUser.toLowerCase()) : true;
+        });
     } catch (error) {
       console.warn(`Failed to fetch git commits from ${repoPath}:`, (error as Error).message);
       return [];
     }
   }
 
-  static getAllCommitsFromRepositories(repositories: RepositoryConfig[], days: number = 7): GitCommit[] {
+  static getAllCommitsFromRepositories(repositories: RepositoryConfig[], days: number = 7, config?: AppConfig): GitCommit[] {
     const allCommits: GitCommit[] = [];
 
     for (const repo of repositories) {
       if (repo.enabled) {
-        const commits = this.getCommitsFromRepository(repo.path, days);
+        const commits = this.getCommitsFromRepository(repo.path, days, config);
         allCommits.push(...commits);
       }
     }
@@ -975,7 +1010,8 @@ const TodoApp: React.FC = () => {
     error: null,
     dids: [],
     loadingDids: false,
-    repositories: []
+    repositories: [],
+    config: {}
   });
   const { exit } = useApp();
   const today = useMemo(() => new Date().toDateString(), []);
@@ -1064,8 +1100,8 @@ const TodoApp: React.FC = () => {
       
       // Get commits from all configured repositories
       const commits = state.repositories.length > 0
-        ? GitManager.getAllCommitsFromRepositories(state.repositories, 7)
-        : GitManager.getRecentCommits(7); // Fallback to current repo
+        ? GitManager.getAllCommitsFromRepositories(state.repositories, 7, state.config)
+        : GitManager.getRecentCommits(7, state.config); // Fallback to current repo
       
       const commitDids = GitManager.convertCommitsToDids(commits);
       
@@ -1088,6 +1124,7 @@ const TodoApp: React.FC = () => {
       updateState({ 
         todos: data.todos, 
         repositories: data.repositories,
+        config: data.config || {},
         error: null 
       });
     } catch (error) {
